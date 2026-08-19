@@ -352,6 +352,44 @@ input,textarea{font:inherit;color:var(--ink)}
 .d-status{font-size:12px;color:var(--ink-faint);flex:1;line-height:1.4}
 .d-actions .go{padding:9px 20px;font-size:14px}
 
+/* ---------- boundaries ---------- */
+.bounds{max-width:760px;margin:0 auto;padding:30px 0 10px}
+.bounds .b-title{font-family:'Fraunces',Georgia,serif;font-weight:560;font-size:clamp(28px,4.5vw,38px);margin:0;letter-spacing:-.01em}
+.bounds .sub{color:var(--ink-soft);font-size:14px;margin:10px 0 0;max-width:44em}
+.b-viz{margin-top:20px;background:var(--surface);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:8px}
+.b-viz svg{display:block;width:100%;height:auto}
+.b-viz .stone{cursor:pointer}
+.b-viz .stone:hover ellipse{stroke-width:2.5}
+.b-viz .stone.sel ellipse{stroke-width:3}
+.b-form{margin-top:22px;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:14px 16px;box-shadow:var(--shadow)}
+.b-form textarea{width:100%;background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:15px;min-height:52px;resize:vertical}
+.b-form .b-if-input{margin-top:8px;min-height:44px}
+.b-form select{
+  background:var(--paper);border:1px solid var(--line);border-radius:999px;
+  padding:8px 12px;font-size:13px;color:var(--ink);
+}
+.b-list{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:22px}
+@media (max-width:620px){.b-list{grid-template-columns:1fr}}
+.b-card{
+  background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--accent);
+  border-radius:12px;padding:12px 14px;position:relative;
+}
+.b-card.p2{border-left-color:var(--vine2)}
+.b-card.sel{box-shadow:0 0 0 2px var(--accent)}
+.b-card.p2.sel{box-shadow:0 0 0 2px var(--vine2)}
+.b-meta-row{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.b-who{font-size:12px;font-weight:600;color:var(--ink-soft)}
+.b-badge{font-size:10px;letter-spacing:.07em;text-transform:uppercase;font-weight:600;border-radius:999px;padding:2px 8px}
+.b-badge.soft{background:var(--surface-2);color:var(--ink-soft)}
+.b-badge.firm{background:var(--accent-soft);color:var(--accent-ink)}
+.b-badge.hard{background:var(--ink);color:var(--paper)}
+.b-card .b-text{font-size:15px;color:var(--ink);white-space:pre-wrap;overflow-wrap:anywhere}
+.b-card .b-if{color:var(--ink-soft);font-size:13.5px;margin-top:7px;padding-top:7px;border-top:1px dashed var(--line);white-space:pre-wrap;overflow-wrap:anywhere}
+.b-card .b-if .arr{color:var(--accent-ink);font-weight:600}
+.b-del{position:absolute;top:8px;right:10px;font-size:14px;color:var(--ink-faint);padding:2px 6px;border-radius:6px}
+.b-del:hover{color:var(--accent-ink);background:var(--surface-2)}
+.b-empty{grid-column:1/-1;color:var(--ink-soft);font-size:15px;text-align:center;background:var(--surface);border:1px dashed var(--line);border-radius:12px;padding:22px;margin:0}
+
 /* ---------- footer ---------- */
 footer{margin-top:56px;border-top:1px solid var(--line)}
 footer .wrap{padding-top:20px;padding-bottom:32px;display:flex;gap:18px;flex-wrap:wrap;align-items:baseline}
@@ -367,6 +405,7 @@ footer button{font-size:13px;color:var(--ink-soft);text-decoration:underline;tex
     <nav class="tabs" id="navTabs" aria-label="Pages">
       <button data-page="journey" class="on">Journey</button>
       <button data-page="diary">Diary</button>
+      <button data-page="boundaries">Boundaries</button>
     </nav>
     <span class="who" id="whoLine"></span>
     <button class="edit" id="editBtn">Edit details</button>
@@ -468,6 +507,29 @@ footer button{font-size:13px;color:var(--ink-soft);text-decoration:underline;tex
       </div>
     </div>
   </div>
+  <div id="pageBoundaries" hidden>
+    <div class="bounds">
+      <p class="eyebrow">The fence</p>
+      <h3 class="b-title">Boundaries</h3>
+      <p class="sub">The garden wall around what you&rsquo;re growing. Each of you names what needs protecting &mdash; and what happens if a line gets crossed. Soft preferences sit close to the plant; hard lines form the outer wall. Tap a stone to read it.</p>
+      <div class="b-viz" id="bViz"></div>
+      <div class="b-form">
+        <div class="d-authors" id="bAuthors"></div>
+        <textarea id="bText" placeholder="I need&hellip; / I&rsquo;m not okay with&hellip;" maxlength="300"></textarea>
+        <textarea id="bIf" class="b-if-input" placeholder="If it&rsquo;s crossed&hellip; (what happens then)" maxlength="300"></textarea>
+        <div class="d-actions">
+          <select id="bFirm" aria-label="How firm is this boundary">
+            <option value="soft">Soft preference</option>
+            <option value="firm" selected>Firm</option>
+            <option value="hard">Hard line</option>
+          </select>
+          <span class="d-status" id="bStatus"></span>
+          <button class="go" id="bAdd">Place the stone</button>
+        </div>
+      </div>
+      <div class="b-list" id="bList"></div>
+    </div>
+  </div>
 </main>
 
 <div class="pop" id="pop" hidden>
@@ -543,9 +605,9 @@ const STAGES = [
 
 /* ---------- state ---------- */
 const KEY='us-so-far-v1',ENC_KEY='us-so-far-enc-v1',SESS_KEY='us-so-far-sk';
-let state={firstDate:null,name1:'',name2:'',stageOverride:null,days:{},entries:[]};
+let state={firstDate:null,name1:'',name2:'',stageOverride:null,days:{},entries:[],boundaries:[]};
 let cryptoKey=null,encSalt=null,encIter=310000;
-function ensureShape(){ if(!Array.isArray(state.entries))state.entries=[]; if(!state.days)state.days={}; }
+function ensureShape(){ if(!Array.isArray(state.entries))state.entries=[]; if(!Array.isArray(state.boundaries))state.boundaries=[]; if(!state.days)state.days={}; }
 function save(){
   try{
     if(cryptoKey) encSave();
@@ -694,7 +756,7 @@ function renderAll(){
   $('cancelEdit').hidden=true;
   $('lockBtn').hidden=!cryptoKey;
   if(!has) return;
-  renderTopbar(); renderRoute(); renderStage(); renderStats(); renderOrganism(); renderCalendars(); renderDiary();
+  renderTopbar(); renderRoute(); renderStage(); renderStats(); renderOrganism(); renderCalendars(); renderDiary(); renderBoundaries();
 }
 
 function coupleLabel(){
@@ -1134,8 +1196,15 @@ function switchPage(p){
   document.querySelectorAll('#navTabs button').forEach(b=>b.classList.toggle('on',b.dataset.page===p));
   $('pageJourney').hidden=p!=='journey';
   $('pageDiary').hidden=p!=='diary';
+  $('pageBoundaries').hidden=p!=='boundaries';
   if(p==='diary'){renderDiary();startDiaryPlant();}
+  else if(p==='boundaries'){stopDiaryPlant();renderBoundaries();}
   else{stopDiaryPlant();renderRoute();drawOrganism(orgM);}
+}
+function currentPage(){
+  if(!$('pageDiary').hidden)return 'diary';
+  if(!$('pageBoundaries').hidden)return 'boundaries';
+  return 'journey';
 }
 $('navTabs').addEventListener('click',e=>{
   const b=e.target.closest('button');if(b)switchPage(b.dataset.page);
@@ -1191,7 +1260,7 @@ $('dAuthors').addEventListener('click',e=>{
   const b=e.target.closest('.d-chip');if(!b)return;
   dAuthor=+b.dataset.a===2?2:1;
   try{localStorage.setItem('us-so-far-author',dAuthor);}catch(_){}
-  renderAuthors();
+  renderAuthors();renderBAuthors();
 });
 function renderThread(){
   const th=$('dThread');
@@ -1241,21 +1310,21 @@ function pageSource(){
   const root=document.documentElement.cloneNode(true);
   root.removeAttribute('data-theme');
   root.querySelectorAll('script:not([data-keep]),link').forEach(n=>n.remove());
-  ['stations','autonote','stagePanel','stats','calSection','whoLine','orgCaption','orgTicks','dThread','dName','dSub','dAuthors','dStatus'].forEach(id=>{
+  ['stations','autonote','stagePanel','stats','calSection','whoLine','orgCaption','orgTicks','dThread','dName','dSub','dAuthors','dStatus','bViz','bList','bAuthors','bStatus'].forEach(id=>{
     const el=root.querySelector('#'+id);if(el)el.innerHTML='';
   });
   ['orgCanvas','diaryCanvas'].forEach(id=>{
     const c=root.querySelector('#'+id);if(c){c.removeAttribute('width');c.removeAttribute('height');c.removeAttribute('style');}
   });
   const hero=root.querySelector('#hero');if(hero)hero.removeAttribute('hidden');
-  ['app','topbar','cancelEdit','pop','pageDiary','lockScreen','passErr','unlockErr','lockBtn'].forEach(id=>{
+  ['app','topbar','cancelEdit','pop','pageDiary','pageBoundaries','lockScreen','passErr','unlockErr','lockBtn'].forEach(id=>{
     const el=root.querySelector('#'+id);if(el)el.setAttribute('hidden','');
   });
   const pj=root.querySelector('#pageJourney');if(pj)pj.removeAttribute('hidden');
   root.querySelectorAll('#navTabs button').forEach(b=>b.classList.toggle('on',b.dataset.page==='journey'));
   root.querySelectorAll('.mk.sel').forEach(n=>n.classList.remove('sel'));
   const st=root.querySelector('#sharedState');
-  st.textContent=JSON.stringify({v:1,firstDate:state.firstDate,name1:state.name1,name2:state.name2,days:state.days,entries:state.entries}).replace(/</g,'\\u003c');
+  st.textContent=JSON.stringify({v:1,firstDate:state.firstDate,name1:state.name1,name2:state.name2,days:state.days,entries:state.entries,boundaries:state.boundaries}).replace(/</g,'\\u003c');
   return '<!doctype html>\n'+root.outerHTML;
 }
 let publishRetried=false;
@@ -1263,7 +1332,7 @@ async function publishShared(){
   const art=await artifactNS();
   if(!art){shareMode='local';renderShareStatus();return;}
   try{
-    sessionStorage.setItem('us-so-far-page',$('pageDiary').hidden?'journey':'diary');
+    sessionStorage.setItem('us-so-far-page',currentPage());
   }catch(e){}
   try{
     await art.publish(pageSource());
@@ -1290,6 +1359,126 @@ async function publishShared(){
   renderShareStatus();
 })();
 
+/* ---------- boundaries: the garden wall ---------- */
+const B_RINGS={soft:62,firm:100,hard:138};
+const B_SIZE={soft:[9,7],firm:[11,8.5],hard:[13,10]};
+let bSel=null;
+function firmLabel(f){return {soft:'Soft preference',firm:'Firm',hard:'Hard line'}[f]||f;}
+function renderBAuthors(){
+  const n1=state.name1||'You',n2=state.name2||'Them';
+  $('bAuthors').innerHTML='<span class="d-writing">Whose boundary?</span>'+
+    '<button class="d-chip c1'+(dAuthor===1?' on':'')+'" data-a="1">'+esc(n1)+'</button>'+
+    '<button class="d-chip c2'+(dAuthor===2?' on':'')+'" data-a="2">'+esc(n2)+'</button>';
+}
+$('bAuthors').addEventListener('click',e=>{
+  const b=e.target.closest('.d-chip');if(!b)return;
+  dAuthor=+b.dataset.a===2?2:1;
+  try{localStorage.setItem('us-so-far-author',dAuthor);}catch(_){}
+  renderBAuthors();renderAuthors();
+});
+function renderBoundaries(){
+  if(!state.firstDate)return;
+  renderBAuthors();renderBViz();renderBList();
+  $('bStatus').textContent=shareCopy();
+}
+function renderBViz(){
+  const cx=220,cy=200;
+  const n1=esc(state.name1||'You'),n2=esc(state.name2||'Them');
+  let svg='<svg viewBox="0 0 440 380" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Your boundaries drawn as a stone wall around the plant">';
+  // rings
+  svg+='<circle cx="'+cx+'" cy="'+cy+'" r="'+B_RINGS.soft+'" fill="none" stroke="var(--line)" stroke-width="1.5" stroke-dasharray="4 5"/>';
+  svg+='<circle cx="'+cx+'" cy="'+cy+'" r="'+B_RINGS.firm+'" fill="none" stroke="var(--line)" stroke-width="1.5"/>';
+  svg+='<circle cx="'+cx+'" cy="'+cy+'" r="'+B_RINGS.hard+'" fill="none" stroke="var(--line)" stroke-width="3"/>';
+  ['soft','firm','hard'].forEach(f=>{
+    svg+='<text x="'+cx+'" y="'+(cy-B_RINGS[f]-6)+'" text-anchor="middle" font-size="10" letter-spacing="1" fill="var(--ink-faint)" style="text-transform:uppercase">'+(f==='hard'?'hard line':f)+'</text>';
+  });
+  // partner side labels
+  svg+='<text x="'+(cx-B_RINGS.hard-14)+'" y="'+cy+'" text-anchor="middle" font-size="11" font-weight="600" fill="var(--accent-ink)" transform="rotate(-90 '+(cx-B_RINGS.hard-14)+' '+cy+')">'+n1+'</text>';
+  svg+='<text x="'+(cx+B_RINGS.hard+14)+'" y="'+cy+'" text-anchor="middle" font-size="11" font-weight="600" fill="var(--vine2)" transform="rotate(90 '+(cx+B_RINGS.hard+14)+' '+cy+')">'+n2+'</text>';
+  // center sprig: two small stems braided once, leaves, one blossom
+  svg+='<g stroke-linecap="round" fill="none">'+
+    '<path d="M214,232 C222,215 210,203 219,184" stroke="var(--vine2)" stroke-width="2.5"/>'+
+    '<path d="M226,232 C218,215 230,203 222,186" stroke="var(--accent)" stroke-width="2.5"/>'+
+    '<ellipse cx="212" cy="212" rx="7" ry="3" fill="var(--leaf2)" transform="rotate(-35 212 212)"/>'+
+    '<ellipse cx="229" cy="205" rx="7" ry="3" fill="var(--leaf1)" transform="rotate(30 229 205)"/>'+
+    '<circle cx="220" cy="181" r="4" fill="var(--accent)"/>'+
+    '<circle cx="220" cy="181" r="1.6" fill="var(--gold)"/>'+
+    '<path d="M204,236 h32" stroke="var(--line)" stroke-width="1.5"/>'+
+  '</g>';
+  // stones: partner 1 on the left arc, partner 2 on the right
+  const bs=state.boundaries.slice().sort((a,b)=>a.ts-b.ts);
+  const groups={};
+  bs.forEach(b=>{const k=(b.a===2?2:1)+'|'+(B_RINGS[b.f]?b.f:'firm');(groups[k]=groups[k]||[]).push(b);});
+  Object.keys(groups).forEach(k=>{
+    const [aStr,f]=k.split('|');const a=+aStr;
+    const r=B_RINGS[f];const [rx,ry]=B_SIZE[f];
+    const start=a===1?110:-70,span=140;
+    const list=groups[k];
+    list.forEach((b,i)=>{
+      const ang=(start+span*(i+0.5)/list.length)*Math.PI/180;
+      const x=cx+r*Math.cos(ang),y=cy+r*Math.sin(ang);
+      const rot=(hash32(b.id)%41)-20;
+      const stroke=a===1?'var(--accent)':'var(--vine2)';
+      const fill=a===1?'var(--accent-soft)':'var(--vine2-soft)';
+      svg+='<g class="stone'+(bSel===b.id?' sel':'')+'" data-bid="'+b.id+'" transform="translate('+x.toFixed(1)+' '+y.toFixed(1)+') rotate('+rot+')">'+
+        '<ellipse rx="'+rx+'" ry="'+ry+'" fill="'+fill+'" stroke="'+stroke+'" stroke-width="1.5"/>'+
+        '<title>'+esc(b.t)+'</title></g>';
+    });
+  });
+  if(!bs.length){
+    svg+='<text x="'+cx+'" y="352" text-anchor="middle" font-size="12" fill="var(--ink-soft)">The wall is unbuilt — place the first stone below.</text>';
+  }
+  svg+='</svg>';
+  $('bViz').innerHTML=svg;
+}
+$('bViz').addEventListener('click',e=>{
+  const g=e.target.closest('[data-bid]');if(!g)return;
+  bSel=g.dataset.bid===bSel?null:g.dataset.bid;
+  renderBViz();renderBList();
+  if(bSel){const card=$('bList').querySelector('[data-bcard="'+bSel+'"]');if(card)card.scrollIntoView({block:'nearest',behavior:'smooth'});}
+});
+function renderBList(){
+  const el=$('bList');
+  const bs=state.boundaries.slice().sort((a,b)=>a.ts-b.ts);
+  if(!bs.length){el.innerHTML='<p class="b-empty">No boundaries yet. Naming them is an act of care — for yourself and for each other.</p>';return;}
+  el.innerHTML=bs.map(b=>{
+    const who=b.a===2?(state.name2||'Them'):(state.name1||'You');
+    return '<div class="b-card'+(b.a===2?' p2':'')+(bSel===b.id?' sel':'')+'" data-bcard="'+b.id+'">'+
+      '<div class="b-meta-row"><span class="b-who">'+esc(who)+'</span><span class="b-badge '+(B_RINGS[b.f]?b.f:'firm')+'">'+firmLabel(b.f)+'</span></div>'+
+      '<div class="b-text">'+esc(b.t)+'</div>'+
+      (b.c?'<div class="b-if"><span class="arr">If crossed →</span> '+esc(b.c)+'</div>':'')+
+      '<button class="b-del" data-bdel="'+b.id+'" aria-label="Remove this boundary">✕</button>'+
+      '</div>';
+  }).join('');
+}
+$('bList').addEventListener('click',e=>{
+  const del=e.target.closest('[data-bdel]');
+  if(del){
+    const b=state.boundaries.find(x=>x.id===del.dataset.bdel);
+    if(b&&confirm('Remove this boundary? ("'+b.t.slice(0,60)+'")')){
+      state.boundaries=state.boundaries.filter(x=>x.id!==del.dataset.bdel);
+      if(bSel===del.dataset.bdel)bSel=null;
+      save();renderBoundaries();publishShared();
+    }
+    return;
+  }
+  const card=e.target.closest('[data-bcard]');
+  if(card){bSel=card.dataset.bcard===bSel?null:card.dataset.bcard;renderBViz();renderBList();}
+});
+$('bAdd').addEventListener('click',()=>{
+  const t=$('bText').value.trim();
+  if(!t){$('bText').focus();return;}
+  const f=['soft','firm','hard'].includes($('bFirm').value)?$('bFirm').value:'firm';
+  state.boundaries.push({
+    id:Date.now().toString(36)+Math.random().toString(36).slice(2,7),
+    a:dAuthor,t:t,c:$('bIf').value.trim(),f:f,ts:Date.now()
+  });
+  save();
+  $('bText').value='';$('bIf').value='';
+  renderBoundaries();
+  publishShared();
+});
+
 /* ---------- adopt the page's shared record ---------- */
 function mergeShared(){
   try{
@@ -1304,6 +1493,10 @@ function mergeShared(){
         const have=new Set(state.entries.map(e=>e.id));
         sh.entries.forEach(e=>{if(e&&e.id&&!have.has(e.id))state.entries.push(e);});
       }
+      if(Array.isArray(sh.boundaries)){
+        const haveB=new Set(state.boundaries.map(b=>b.id));
+        sh.boundaries.forEach(b=>{if(b&&b.id&&!haveB.has(b.id))state.boundaries.push(b);});
+      }
       save();
     }
   }catch(e){}
@@ -1311,7 +1504,7 @@ function mergeShared(){
 function restorePage(){
   try{
     const p=sessionStorage.getItem('us-so-far-page');
-    if(p){sessionStorage.removeItem('us-so-far-page');if(p==='diary'&&state.firstDate)switchPage('diary');}
+    if(p){sessionStorage.removeItem('us-so-far-page');if((p==='diary'||p==='boundaries')&&state.firstDate)switchPage(p);}
   }catch(e){}
 }
 function showLock(){
