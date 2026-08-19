@@ -140,6 +140,7 @@ input,textarea{font:inherit;color:var(--ink)}
 .cancel-edit{font-size:14px;color:var(--ink-soft);text-decoration:underline;text-underline-offset:3px;padding:12px 4px}
 .hero .hint{margin-top:14px;font-size:13px;color:var(--ink-faint);max-width:40em}
 .perr{margin:14px 0 0;font-size:14px;font-weight:600;color:var(--accent-ink)}
+#lockWho{margin-bottom:20px}
 .linklike{font-size:inherit;color:var(--ink-soft);text-decoration:underline;text-underline-offset:3px}
 
 /* ---------- layout ---------- */
@@ -341,6 +342,8 @@ input,textarea{font:inherit;color:var(--ink)}
 .d-entry.a1 .bubble{background:var(--accent-soft);border-bottom-left-radius:5px}
 .d-entry.a2 .bubble{background:var(--vine2-soft);border-bottom-right-radius:5px}
 .b-meta{font-size:11px;color:var(--ink-faint);margin-top:4px;padding:0 4px}
+.d-entry.priv .bubble{border:1.5px dashed var(--ink-faint)}
+.only-you{color:var(--accent-ink);font-weight:600}
 .d-composer{margin-top:26px;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:14px 16px;box-shadow:var(--shadow)}
 .d-authors{display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap}
 .d-writing{font-size:12px;color:var(--ink-faint)}
@@ -430,29 +433,34 @@ footer button{font-size:13px;color:var(--ink-soft);text-decoration:underline;tex
       <label for="name2">Them <span style="text-transform:none;letter-spacing:0">(optional)</span></label>
       <input type="text" id="name2" placeholder="Sam" autocomplete="off" maxlength="20">
     </div>
-    <div class="field names">
-      <label for="passphrase">Passphrase</label>
+    <div class="field names" id="pass1wrap">
+      <label for="passphrase" id="passLabel">Your passcode</label>
       <input type="password" id="passphrase" placeholder="min 6 chars" autocomplete="new-password" maxlength="64">
+    </div>
+    <div class="field names" id="pass2wrap">
+      <label for="passphrase2">Their passcode</label>
+      <input type="password" id="passphrase2" placeholder="min 6 chars" autocomplete="new-password" maxlength="64">
     </div>
     <button class="go" id="goBtn">Trace the journey</button>
     <button class="cancel-edit" id="cancelEdit" hidden>Cancel</button>
   </div>
   <p class="perr" id="passErr" hidden></p>
-  <p class="hint">The passphrase locks your diary on this device &mdash; everything is stored encrypted, and there&rsquo;s no recovery if it&rsquo;s forgotten. Nothing is sent anywhere.</p>
+  <p class="hint">Each of you gets a personal passcode &mdash; the person filling this in is partner one. What you each write stays yours unless you mark it &ldquo;both of us&rdquo;; the shared story is visible to you both. Everything is stored encrypted, and there&rsquo;s no recovery for a forgotten passcode.</p>
 </section>
 
 <section class="hero wrap" id="lockScreen" hidden>
   <span class="wordmark">Us, So Far</span>
   <h1 class="display">Welcome back.</h1>
-  <p class="lede">This diary is locked. Enter your couple passphrase to open it.</p>
+  <p class="lede" id="lockLede">Say who you are and enter your passcode &mdash; you&rsquo;ll see the shared story and your own private notes.</p>
+  <div class="d-authors" id="lockWho"></div>
   <div class="setup">
     <div class="field">
-      <label for="unlockPass">Passphrase</label>
+      <label for="unlockPass">Passcode</label>
       <input type="password" id="unlockPass" autocomplete="current-password" maxlength="64">
     </div>
     <button class="go" id="unlockBtn">Unlock</button>
   </div>
-  <p class="perr" id="unlockErr" hidden>That passphrase doesn&rsquo;t open this diary.</p>
+  <p class="perr" id="unlockErr" hidden>That passcode doesn&rsquo;t open this side of the diary.</p>
   <p class="hint">Forgotten? There&rsquo;s no recovery &mdash; <button class="linklike" id="lockReset">start over</button> erases everything on this device.</p>
 </section>
 
@@ -549,7 +557,7 @@ footer button{font-size:13px;color:var(--ink-soft);text-decoration:underline;tex
 
 <footer>
   <div class="wrap">
-    <p>Your dates, marks, notes and diary stay in this browser &mdash; encrypted with your passphrase.</p>
+    <p>Everything stays in this browser, encrypted &mdash; each of you with your own passcode, your private notes readable only by you.</p>
     <button id="resetBtn">Start over</button>
   </div>
 </footer>
@@ -605,45 +613,87 @@ const STAGES = [
 
 /* ---------- state ---------- */
 const KEY='us-so-far-v1',ENC_KEY='us-so-far-enc-v1',SESS_KEY='us-so-far-sk';
+const ENC2='us-so-far-enc-v2',SESS2='us-so-far-sess2';
 let state={firstDate:null,name1:'',name2:'',stageOverride:null,days:{},entries:[],boundaries:[]};
-let cryptoKey=null,encSalt=null,encIter=310000;
-function ensureShape(){ if(!Array.isArray(state.entries))state.entries=[]; if(!Array.isArray(state.boundaries))state.boundaries=[]; if(!state.days)state.days={}; }
-function save(){
-  try{
-    if(cryptoKey) encSave();
-    else localStorage.setItem(KEY,JSON.stringify(state));
-  }catch(e){}
+let privState={entries:[],boundaries:[]};
+let who=1,kS=null,kOwn=null,encMeta=null,encIter=310000;
+let cryptoKey=null,migrating=false; // legacy v1 key, kept only for the migration unlock
+function ensureShape(){
+  if(!Array.isArray(state.entries))state.entries=[];
+  if(!Array.isArray(state.boundaries))state.boundaries=[];
+  if(!state.days)state.days={};
+  if(!Array.isArray(privState.entries))privState.entries=[];
+  if(!Array.isArray(privState.boundaries))privState.boundaries=[];
 }
-let encBusy=false,encAgain=false;
-async function encSave(){
-  if(encBusy){encAgain=true;return;}
-  encBusy=true;
-  try{
-    const iv=crypto.getRandomValues(new Uint8Array(12));
-    const ct=await crypto.subtle.encrypt({name:'AES-GCM',iv:iv},cryptoKey,new TextEncoder().encode(JSON.stringify(state)));
-    localStorage.setItem(ENC_KEY,JSON.stringify({v:1,iter:encIter,salt:b64(encSalt),iv:b64(iv),ct:b64(new Uint8Array(ct))}));
-    localStorage.removeItem(KEY);
-  }catch(e){}
-  encBusy=false;
-  if(encAgain){encAgain=false;encSave();}
-}
+function myName(){return who===2?(state.name2||'Partner 2'):(state.name1||'Partner 1');}
 function b64(u){let s='';u.forEach(c=>s+=String.fromCharCode(c));return btoa(s);}
 function unb64(s){const bin=atob(s);const u=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i);return u;}
+function rnd(n){return crypto.getRandomValues(new Uint8Array(n));}
 async function deriveKey(pass,salt,iter){
   const km=await crypto.subtle.importKey('raw',new TextEncoder().encode(pass),'PBKDF2',false,['deriveKey']);
   return crypto.subtle.deriveKey({name:'PBKDF2',salt:salt,iterations:iter,hash:'SHA-256'},km,{name:'AES-GCM',length:256},true,['encrypt','decrypt']);
 }
-async function sessionSaveKey(){
-  try{const raw=await crypto.subtle.exportKey('raw',cryptoKey);sessionStorage.setItem(SESS_KEY,b64(new Uint8Array(raw)));}catch(e){}
+async function newKey(){return crypto.subtle.generateKey({name:'AES-GCM',length:256},true,['encrypt','decrypt']);}
+async function wrapKey(key,kek){
+  const iv=rnd(12);const raw=await crypto.subtle.exportKey('raw',key);
+  const ct=await crypto.subtle.encrypt({name:'AES-GCM',iv:iv},kek,raw);
+  return{iv:b64(iv),ct:b64(new Uint8Array(ct))};
 }
-async function sessionLoadKey(){
-  const s=sessionStorage.getItem(SESS_KEY);if(!s)return null;
-  return crypto.subtle.importKey('raw',unb64(s),{name:'AES-GCM'},true,['encrypt','decrypt']);
+async function unwrapKey(w,kek){
+  const raw=await crypto.subtle.decrypt({name:'AES-GCM',iv:unb64(w.iv)},kek,unb64(w.ct));
+  return crypto.subtle.importKey('raw',raw,{name:'AES-GCM'},true,['encrypt','decrypt']);
 }
-async function decState(metaRaw){
+async function encJSON(obj,key){
+  const iv=rnd(12);
+  const ct=await crypto.subtle.encrypt({name:'AES-GCM',iv:iv},key,new TextEncoder().encode(JSON.stringify(obj)));
+  return{iv:b64(iv),ct:b64(new Uint8Array(ct)),ts:Date.now()};
+}
+async function decJSON(box,key){
+  const pt=await crypto.subtle.decrypt({name:'AES-GCM',iv:unb64(box.iv)},key,unb64(box.ct));
+  return JSON.parse(new TextDecoder().decode(pt));
+}
+function save(){
+  try{
+    if(kS)encSave2();
+    else localStorage.setItem(KEY,JSON.stringify(state));
+  }catch(e){}
+}
+let encBusy=false,encAgain=false;
+async function encSave2(){
+  if(encBusy){encAgain=true;return;}
+  encBusy=true;
+  try{
+    encMeta.shared=await encJSON(state,kS);
+    encMeta['priv'+who]=await encJSON(privState,kOwn);
+    localStorage.setItem(ENC2,JSON.stringify(encMeta));
+    localStorage.removeItem(KEY);localStorage.removeItem(ENC_KEY);
+  }catch(e){}
+  encBusy=false;
+  if(encAgain){encAgain=false;encSave2();}
+}
+async function encSave2Now(){
+  while(encBusy)await new Promise(r=>setTimeout(r,25));
+  await encSave2();
+  while(encBusy)await new Promise(r=>setTimeout(r,25));
+}
+async function sess2Save(){
+  try{
+    const s=await crypto.subtle.exportKey('raw',kS),p=await crypto.subtle.exportKey('raw',kOwn);
+    sessionStorage.setItem(SESS2,JSON.stringify({w:who,s:b64(new Uint8Array(s)),p:b64(new Uint8Array(p))}));
+  }catch(e){}
+}
+async function sess2Load(){
+  const r=sessionStorage.getItem(SESS2);if(!r)return false;
+  try{
+    const o=JSON.parse(r);who=o.w===2?2:1;
+    kS=await crypto.subtle.importKey('raw',unb64(o.s),{name:'AES-GCM'},true,['encrypt','decrypt']);
+    kOwn=await crypto.subtle.importKey('raw',unb64(o.p),{name:'AES-GCM'},true,['encrypt','decrypt']);
+    return true;
+  }catch(e){kS=null;kOwn=null;return false;}
+}
+async function decStateV1(metaRaw){
   const m=JSON.parse(metaRaw);
   const pt=await crypto.subtle.decrypt({name:'AES-GCM',iv:unb64(m.iv)},cryptoKey,unb64(m.ct));
-  encSalt=unb64(m.salt);encIter=m.iter||encIter;
   return JSON.parse(new TextDecoder().decode(pt));
 }
 
@@ -677,39 +727,100 @@ $('goBtn').addEventListener('click',async()=>{
   const v=$('firstDate').value;
   if(!v){ $('firstDate').focus(); return; }
   if(parseD(v)>today()){ alert('Your first date needs to be in the past — this maps the road already travelled.'); return; }
-  const pv=$('passphrase').value;
-  if(!cryptoKey){
-    if(pv.length<6){ passErr('Set a passphrase of at least 6 characters — it locks the diary.'); $('passphrase').focus(); return; }
-  }else if(pv&&pv.length<6){ passErr('A new passphrase needs at least 6 characters (or leave it empty to keep the current one).'); return; }
-  if(pv.length>=6){
-    encSalt=crypto.getRandomValues(new Uint8Array(16));
-    try{ cryptoKey=await deriveKey(pv,encSalt,encIter); await sessionSaveKey(); }
-    catch(e){ passErr('Encryption isn’t available in this browser.'); cryptoKey=null; }
+  const p1=$('passphrase').value,p2=$('passphrase2').value;
+  if(!kS){
+    if(p1.length<6||p2.length<6){
+      passErr('Set a passcode for each of you — at least 6 characters each. You are partner one; they are partner two.');
+      return;
+    }
+    try{
+      const salt1=rnd(16),salt2=rnd(16);
+      const kek1=await deriveKey(p1,salt1,encIter),kek2=await deriveKey(p2,salt2,encIter);
+      kS=await newKey();
+      const kP1=await newKey(),kP2=await newKey();
+      encMeta={v:2,iter:encIter,salt1:b64(salt1),salt2:b64(salt2),
+        wrapS1:await wrapKey(kS,kek1),wrapS2:await wrapKey(kS,kek2),
+        wrapP1:await wrapKey(kP1,kek1),wrapP2:await wrapKey(kP2,kek2),
+        sec_ts:Date.now(),n1:'',n2:'',shared:null,priv1:null,priv2:null};
+      who=1;kOwn=kP1;
+      if(migrating){migrating=false;cryptoKey=null;}
+      await sess2Save();
+    }catch(e){
+      passErr('Encryption isn’t available in this browser.');
+      kS=null;kOwn=null;encMeta=null;return;
+    }
+  }else if(p1){
+    if(p1.length<6){ passErr('A new passcode needs at least 6 characters (or leave it empty to keep the current one).'); return; }
+    const salt=rnd(16);const kek=await deriveKey(p1,salt,encIter);
+    encMeta['salt'+who]=b64(salt);
+    encMeta['wrapS'+who]=await wrapKey(kS,kek);
+    encMeta['wrapP'+who]=await wrapKey(kOwn,kek);
+    encMeta.sec_ts=Date.now();
   }
-  $('passphrase').value='';
+  $('passphrase').value='';$('passphrase2').value='';
   state.firstDate=v;
   state.name1=$('name1').value.trim();
   state.name2=$('name2').value.trim();
+  if(encMeta){encMeta.n1=state.name1;encMeta.n2=state.name2;}
+  ensureShape();
   save(); renderAll();
   publishShared();
+});
+let lockWhoSel=1,lockMode=2;
+function renderLockWho(){
+  const el=$('lockWho');
+  if(lockMode===1){
+    el.innerHTML='';
+    $('lockLede').textContent='This diary is locked. Enter your couple passphrase to open it — then you’ll each choose a personal passcode.';
+    return;
+  }
+  const n1=(encMeta&&encMeta.n1)||'Partner 1',n2=(encMeta&&encMeta.n2)||'Partner 2';
+  el.innerHTML='<span class="d-writing">I am</span>'+
+    '<button class="d-chip c1'+(lockWhoSel===1?' on':'')+'" data-a="1">'+esc(n1)+'</button>'+
+    '<button class="d-chip c2'+(lockWhoSel===2?' on':'')+'" data-a="2">'+esc(n2)+'</button>';
+}
+$('lockWho').addEventListener('click',e=>{
+  const b=e.target.closest('.d-chip');if(!b)return;
+  lockWhoSel=+b.dataset.a===2?2:1;renderLockWho();
 });
 async function tryUnlock(){
   const el=$('unlockErr'); el.hidden=true;
   const pv=$('unlockPass').value;
   if(!pv) return;
-  const encRaw=localStorage.getItem(ENC_KEY);
-  if(!encRaw) return;
+  if(lockMode===1){
+    const encRaw=localStorage.getItem(ENC_KEY);
+    if(!encRaw) return;
+    try{
+      const m=JSON.parse(encRaw);
+      cryptoKey=await deriveKey(pv,unb64(m.salt),m.iter||encIter);
+      state=Object.assign(state,await decStateV1(encRaw));
+      ensureShape();
+      $('unlockPass').value='';
+      $('lockScreen').hidden=true;
+      migrating=true;
+      $('firstDate').value=state.firstDate||'';$('name1').value=state.name1;$('name2').value=state.name2;
+      $('passLabel').textContent='Your passcode';$('pass2wrap').hidden=false;
+      hero.hidden=false;
+      passErr('One more step: set a personal passcode for each of you. The shared passphrase is retired — from now on you each unlock your own side.');
+    }catch(e){
+      cryptoKey=null;el.hidden=false;$('unlockPass').select();
+    }
+    return;
+  }
   try{
-    const m=JSON.parse(encRaw);
-    cryptoKey=await deriveKey(pv,unb64(m.salt),m.iter||encIter);
-    state=Object.assign(state,await decState(encRaw));
+    const kek=await deriveKey(pv,unb64(encMeta['salt'+lockWhoSel]),encMeta.iter||encIter);
+    kS=await unwrapKey(encMeta['wrapS'+lockWhoSel],kek);
+    kOwn=await unwrapKey(encMeta['wrapP'+lockWhoSel],kek);
+    who=lockWhoSel;
+    state=Object.assign(state,encMeta.shared?await decJSON(encMeta.shared,kS):(EMBED&&EMBED.v===2&&EMBED.shared?EMBED.shared:{}));
+    privState=encMeta['priv'+who]?await decJSON(encMeta['priv'+who],kOwn):{entries:[],boundaries:[]};
     ensureShape();
-    await sessionSaveKey();
+    await sess2Save();
     $('unlockPass').value='';
     $('lockScreen').hidden=true;
-    mergeShared(); renderAll(); restorePage();
+    mergeShared(); renderAll(); restorePage(); save();
   }catch(e){
-    cryptoKey=null;
+    kS=null;kOwn=null;
     el.hidden=false;
     $('unlockPass').select();
   }
@@ -717,16 +828,17 @@ async function tryUnlock(){
 $('unlockBtn').addEventListener('click',tryUnlock);
 $('unlockPass').addEventListener('keydown',e=>{ if(e.key==='Enter')tryUnlock(); });
 $('lockBtn').addEventListener('click',()=>{
-  try{sessionStorage.removeItem(SESS_KEY);}catch(e){}
+  try{sessionStorage.removeItem(SESS2);sessionStorage.removeItem(SESS_KEY);}catch(e){}
   location.reload();
 });
 function wipeAll(){
   try{
-    localStorage.removeItem(KEY);localStorage.removeItem(ENC_KEY);
-    sessionStorage.removeItem(SESS_KEY);sessionStorage.removeItem('us-so-far-page');
+    localStorage.removeItem(KEY);localStorage.removeItem(ENC_KEY);localStorage.removeItem(ENC2);
+    sessionStorage.removeItem(SESS_KEY);sessionStorage.removeItem(SESS2);sessionStorage.removeItem('us-so-far-page');
   }catch(e){}
-  cryptoKey=null;encSalt=null;
-  state={firstDate:null,name1:'',name2:'',stageOverride:null,days:{},entries:[]};
+  cryptoKey=null;kS=null;kOwn=null;encMeta=null;who=1;migrating=false;
+  state={firstDate:null,name1:'',name2:'',stageOverride:null,days:{},entries:[],boundaries:[]};
+  privState={entries:[],boundaries:[]};
 }
 $('lockReset').addEventListener('click',()=>{
   if(confirm('Erase the first date and every mark, note and entry from this browser?')){
@@ -735,6 +847,8 @@ $('lockReset').addEventListener('click',()=>{
 });
 $('editBtn').addEventListener('click',()=>{
   $('firstDate').value=state.firstDate; $('name1').value=state.name1; $('name2').value=state.name2;
+  $('passLabel').textContent=kS?'Change your passcode':'Your passcode';
+  $('pass2wrap').hidden=!!kS;
   $('cancelEdit').hidden=false;
   hero.hidden=false; app.hidden=true; topbar.hidden=true;
   window.scrollTo({top:0});
@@ -750,12 +864,15 @@ $('resetBtn').addEventListener('click',()=>{
 
 /* ---------- render ---------- */
 function renderAll(){
-  const has=!!state.firstDate;
+  const has=!!state.firstDate&&!migrating;
   hero.hidden=has; app.hidden=!has; topbar.hidden=!has;
   $('lockScreen').hidden=true;
   $('cancelEdit').hidden=true;
-  $('lockBtn').hidden=!cryptoKey;
-  if(!has) return;
+  $('lockBtn').hidden=!kS;
+  if(!has){
+    if(!migrating){$('passLabel').textContent='Your passcode';$('pass2wrap').hidden=false;}
+    return;
+  }
   renderTopbar(); renderRoute(); renderStage(); renderStats(); renderOrganism(); renderCalendars(); renderDiary(); renderBoundaries();
 }
 
@@ -767,7 +884,8 @@ function coupleLabel(){
 
 function renderTopbar(){
   const d=daysBetween(parseD(state.firstDate),today());
-  $('whoLine').innerHTML='<strong>'+esc(coupleLabel())+'</strong> · since '+fmtLong(parseD(state.firstDate))+' · day '+(d+1).toLocaleString();
+  $('whoLine').innerHTML='<strong>'+esc(coupleLabel())+'</strong> · since '+fmtLong(parseD(state.firstDate))+' · day '+(d+1).toLocaleString()+
+    (kS?' · you’re <strong>'+esc(myName())+'</strong>':'');
 }
 
 function esc(s){ return s.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
@@ -1241,39 +1359,48 @@ function startDiaryPlant(){
 }
 
 /* ---------- diary: thread ---------- */
-let dAuthor=1;
-try{dAuthor=+(localStorage.getItem('us-so-far-author')||1)===2?2:1;}catch(e){}
+let dVis='priv',bVis='shared';
+function newId(){return Date.now().toString(36)+Math.random().toString(36).slice(2,7);}
 function renderDiary(){
   if(!state.firstDate)return;
   $('dName').textContent=coupleLabel();
   const first=parseD(state.firstDate);
   $('dSub').textContent='growing since '+fmtLong(first)+' · day '+((daysBetween(first,today())+1).toLocaleString());
-  renderAuthors();renderThread();renderShareStatus();
+  renderVisChips();renderThread();renderShareStatus();
 }
-function renderAuthors(){
-  const n1=state.name1||'You',n2=state.name2||'Them';
-  $('dAuthors').innerHTML='<span class="d-writing">Writing as</span>'+
-    '<button class="d-chip c1'+(dAuthor===1?' on':'')+'" data-a="1">'+esc(n1)+'</button>'+
-    '<button class="d-chip c2'+(dAuthor===2?' on':'')+'" data-a="2">'+esc(n2)+'</button>';
+function visChipsHTML(sel){
+  return '<button class="d-chip c1'+(sel==='priv'?' on':'')+'" data-v="priv">Only me</button>'+
+    '<button class="d-chip c2'+(sel==='shared'?' on':'')+'" data-v="shared">Both of us</button>';
+}
+function renderVisChips(){
+  if(!kS){
+    $('dAuthors').innerHTML='<span class="d-writing">Writing as '+esc(myName())+' · visible to both (set passcodes to write private notes)</span>';
+    return;
+  }
+  $('dAuthors').innerHTML='<span class="d-writing">'+esc(myName())+', visible to</span>'+visChipsHTML(dVis);
 }
 $('dAuthors').addEventListener('click',e=>{
   const b=e.target.closest('.d-chip');if(!b)return;
-  dAuthor=+b.dataset.a===2?2:1;
-  try{localStorage.setItem('us-so-far-author',dAuthor);}catch(_){}
-  renderAuthors();renderBAuthors();
+  dVis=b.dataset.v==='shared'?'shared':'priv';
+  renderVisChips();
 });
+function allEntries(){
+  return state.entries.map(e=>e)
+    .concat(privState.entries.map(e=>Object.assign({},e,{_p:true})))
+    .sort((a,b)=>a.ts-b.ts);
+}
 function renderThread(){
   const th=$('dThread');
-  const es=state.entries.slice().sort((a,b)=>a.ts-b.ts);
+  const es=allEntries();
   if(!es.length){
-    th.innerHTML='<p class="d-empty">Nothing here yet. Write the first entry — a thought, a thanks, a small thing worth keeping.</p>';
+    th.innerHTML='<p class="d-empty">Nothing here yet. Write the first entry — a thought, a thanks, a small thing worth keeping. &ldquo;Only me&rdquo; entries are your private journal; &ldquo;both of us&rdquo; entries are the conversation.</p>';
     return;
   }
   th.innerHTML=es.map(e=>{
-    const who=e.a===2?(state.name2||'Them'):(state.name1||'You');
+    const whoN=e.a===2?(state.name2||'Them'):(state.name1||'You');
     const d=new Date(e.ts);
     const when=d.getDate()+' '+MONTH_NAMES[d.getMonth()].slice(0,3)+' '+d.getFullYear()+', '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');
-    return '<div class="d-entry a'+(e.a===2?2:1)+'"><div class="bubble">'+esc(e.t)+'</div><div class="b-meta">'+esc(who)+' · '+when+'</div></div>';
+    return '<div class="d-entry a'+(e.a===2?2:1)+(e._p?' priv':'')+'"><div class="bubble">'+esc(e.t)+'</div><div class="b-meta">'+esc(whoN)+' · '+when+(e._p?' · <span class="only-you">only you</span>':'')+'</div></div>';
   }).join('');
 }
 $('dPost').addEventListener('click',postEntry);
@@ -1282,7 +1409,9 @@ $('dText').addEventListener('keydown',e=>{
 });
 function postEntry(){
   const t=$('dText').value.trim();if(!t)return;
-  state.entries.push({id:Date.now().toString(36)+Math.random().toString(36).slice(2,7),a:dAuthor,t:t,ts:Date.now()});
+  const e={id:newId(),a:who,t:t,ts:Date.now()};
+  if(dVis==='priv'&&kS)privState.entries.push(e);
+  else state.entries.push(e);
   save();
   $('dText').value='';
   renderThread();
@@ -1323,14 +1452,27 @@ function pageSource(){
   const pj=root.querySelector('#pageJourney');if(pj)pj.removeAttribute('hidden');
   root.querySelectorAll('#navTabs button').forEach(b=>b.classList.toggle('on',b.dataset.page==='journey'));
   root.querySelectorAll('.mk.sel').forEach(n=>n.classList.remove('sel'));
+  const lw=root.querySelector('#lockWho');if(lw)lw.innerHTML='';
   const st=root.querySelector('#sharedState');
-  st.textContent=JSON.stringify({v:1,firstDate:state.firstDate,name1:state.name1,name2:state.name2,days:state.days,entries:state.entries,boundaries:state.boundaries}).replace(/</g,'\\u003c');
+  let payload;
+  if(encMeta&&kS){
+    payload={v:2,
+      shared:{firstDate:state.firstDate,name1:state.name1,name2:state.name2,days:state.days,entries:state.entries,boundaries:state.boundaries},
+      sec:{iter:encMeta.iter,salt1:encMeta.salt1,salt2:encMeta.salt2,
+        wrapS1:encMeta.wrapS1,wrapS2:encMeta.wrapS2,wrapP1:encMeta.wrapP1,wrapP2:encMeta.wrapP2,
+        sec_ts:encMeta.sec_ts,n1:encMeta.n1,n2:encMeta.n2,
+        priv1:encMeta.priv1,priv2:encMeta.priv2}};
+  }else{
+    payload={v:1,firstDate:state.firstDate,name1:state.name1,name2:state.name2,days:state.days,entries:state.entries,boundaries:state.boundaries};
+  }
+  st.textContent=JSON.stringify(payload).replace(/</g,'\\u003c');
   return '<!doctype html>\n'+root.outerHTML;
 }
 let publishRetried=false;
 async function publishShared(){
   const art=await artifactNS();
   if(!art){shareMode='local';renderShareStatus();return;}
+  if(kS){try{await encSave2Now();}catch(e){}}
   try{
     sessionStorage.setItem('us-so-far-page',currentPage());
   }catch(e){}
@@ -1364,21 +1506,26 @@ const B_RINGS={soft:62,firm:100,hard:138};
 const B_SIZE={soft:[9,7],firm:[11,8.5],hard:[13,10]};
 let bSel=null;
 function firmLabel(f){return {soft:'Soft preference',firm:'Firm',hard:'Hard line'}[f]||f;}
-function renderBAuthors(){
-  const n1=state.name1||'You',n2=state.name2||'Them';
-  $('bAuthors').innerHTML='<span class="d-writing">Whose boundary?</span>'+
-    '<button class="d-chip c1'+(dAuthor===1?' on':'')+'" data-a="1">'+esc(n1)+'</button>'+
-    '<button class="d-chip c2'+(dAuthor===2?' on':'')+'" data-a="2">'+esc(n2)+'</button>';
+function renderBVisChips(){
+  if(!kS){
+    $('bAuthors').innerHTML='<span class="d-writing">'+esc(myName())+'&rsquo;s boundary · visible to both</span>';
+    return;
+  }
+  $('bAuthors').innerHTML='<span class="d-writing">'+esc(myName())+'&rsquo;s boundary, visible to</span>'+visChipsHTML(bVis);
 }
 $('bAuthors').addEventListener('click',e=>{
   const b=e.target.closest('.d-chip');if(!b)return;
-  dAuthor=+b.dataset.a===2?2:1;
-  try{localStorage.setItem('us-so-far-author',dAuthor);}catch(_){}
-  renderBAuthors();renderAuthors();
+  bVis=b.dataset.v==='shared'?'shared':'priv';
+  renderBVisChips();
 });
+function allBoundaries(){
+  return state.boundaries.map(b=>b)
+    .concat(privState.boundaries.map(b=>Object.assign({},b,{_p:true})))
+    .sort((a,b)=>a.ts-b.ts);
+}
 function renderBoundaries(){
   if(!state.firstDate)return;
-  renderBAuthors();renderBViz();renderBList();
+  renderBVisChips();renderBViz();renderBList();
   $('bStatus').textContent=shareCopy();
 }
 function renderBViz(){
@@ -1405,8 +1552,8 @@ function renderBViz(){
     '<circle cx="220" cy="181" r="1.6" fill="var(--gold)"/>'+
     '<path d="M204,236 h32" stroke="var(--line)" stroke-width="1.5"/>'+
   '</g>';
-  // stones: partner 1 on the left arc, partner 2 on the right
-  const bs=state.boundaries.slice().sort((a,b)=>a.ts-b.ts);
+  // stones: partner 1 on the left arc, partner 2 on the right; your private drafts are dashed
+  const bs=allBoundaries();
   const groups={};
   bs.forEach(b=>{const k=(b.a===2?2:1)+'|'+(B_RINGS[b.f]?b.f:'firm');(groups[k]=groups[k]||[]).push(b);});
   Object.keys(groups).forEach(k=>{
@@ -1421,8 +1568,8 @@ function renderBViz(){
       const stroke=a===1?'var(--accent)':'var(--vine2)';
       const fill=a===1?'var(--accent-soft)':'var(--vine2-soft)';
       svg+='<g class="stone'+(bSel===b.id?' sel':'')+'" data-bid="'+b.id+'" transform="translate('+x.toFixed(1)+' '+y.toFixed(1)+') rotate('+rot+')">'+
-        '<ellipse rx="'+rx+'" ry="'+ry+'" fill="'+fill+'" stroke="'+stroke+'" stroke-width="1.5"/>'+
-        '<title>'+esc(b.t)+'</title></g>';
+        '<ellipse rx="'+rx+'" ry="'+ry+'" fill="'+fill+'" stroke="'+stroke+'" stroke-width="1.5"'+(b._p?' stroke-dasharray="3 3"':'')+'/>'+
+        '<title>'+esc(b.t)+(b._p?' (only you)':'')+'</title></g>';
     });
   });
   if(!bs.length){
@@ -1439,25 +1586,30 @@ $('bViz').addEventListener('click',e=>{
 });
 function renderBList(){
   const el=$('bList');
-  const bs=state.boundaries.slice().sort((a,b)=>a.ts-b.ts);
-  if(!bs.length){el.innerHTML='<p class="b-empty">No boundaries yet. Naming them is an act of care — for yourself and for each other.</p>';return;}
+  const bs=allBoundaries();
+  if(!bs.length){el.innerHTML='<p class="b-empty">No boundaries yet. Naming them is an act of care — for yourself and for each other. &ldquo;Only me&rdquo; keeps one as a private draft until you&rsquo;re ready.</p>';return;}
   el.innerHTML=bs.map(b=>{
-    const who=b.a===2?(state.name2||'Them'):(state.name1||'You');
+    const whoN=b.a===2?(state.name2||'Them'):(state.name1||'You');
+    const canDel=b._p||!kS||b.a===who;
     return '<div class="b-card'+(b.a===2?' p2':'')+(bSel===b.id?' sel':'')+'" data-bcard="'+b.id+'">'+
-      '<div class="b-meta-row"><span class="b-who">'+esc(who)+'</span><span class="b-badge '+(B_RINGS[b.f]?b.f:'firm')+'">'+firmLabel(b.f)+'</span></div>'+
+      '<div class="b-meta-row"><span class="b-who">'+esc(whoN)+'</span><span class="b-badge '+(B_RINGS[b.f]?b.f:'firm')+'">'+firmLabel(b.f)+'</span>'+
+      (b._p?'<span class="b-badge soft">only you</span>':'')+'</div>'+
       '<div class="b-text">'+esc(b.t)+'</div>'+
       (b.c?'<div class="b-if"><span class="arr">If crossed →</span> '+esc(b.c)+'</div>':'')+
-      '<button class="b-del" data-bdel="'+b.id+'" aria-label="Remove this boundary">✕</button>'+
+      (canDel?'<button class="b-del" data-bdel="'+b.id+'" aria-label="Remove this boundary">✕</button>':'')+
       '</div>';
   }).join('');
 }
 $('bList').addEventListener('click',e=>{
   const del=e.target.closest('[data-bdel]');
   if(del){
-    const b=state.boundaries.find(x=>x.id===del.dataset.bdel);
+    const id=del.dataset.bdel;
+    const inShared=state.boundaries.find(x=>x.id===id);
+    const b=inShared||privState.boundaries.find(x=>x.id===id);
     if(b&&confirm('Remove this boundary? ("'+b.t.slice(0,60)+'")')){
-      state.boundaries=state.boundaries.filter(x=>x.id!==del.dataset.bdel);
-      if(bSel===del.dataset.bdel)bSel=null;
+      if(inShared)state.boundaries=state.boundaries.filter(x=>x.id!==id);
+      else privState.boundaries=privState.boundaries.filter(x=>x.id!==id);
+      if(bSel===id)bSel=null;
       save();renderBoundaries();publishShared();
     }
     return;
@@ -1469,10 +1621,9 @@ $('bAdd').addEventListener('click',()=>{
   const t=$('bText').value.trim();
   if(!t){$('bText').focus();return;}
   const f=['soft','firm','hard'].includes($('bFirm').value)?$('bFirm').value:'firm';
-  state.boundaries.push({
-    id:Date.now().toString(36)+Math.random().toString(36).slice(2,7),
-    a:dAuthor,t:t,c:$('bIf').value.trim(),f:f,ts:Date.now()
-  });
+  const b={id:newId(),a:who,t:t,c:$('bIf').value.trim(),f:f,ts:Date.now()};
+  if(bVis==='priv'&&kS)privState.boundaries.push(b);
+  else state.boundaries.push(b);
   save();
   $('bText').value='';$('bIf').value='';
   renderBoundaries();
@@ -1480,21 +1631,25 @@ $('bAdd').addEventListener('click',()=>{
 });
 
 /* ---------- adopt the page's shared record ---------- */
+let EMBED={};
+try{
+  const shEl=document.getElementById('sharedState');
+  EMBED=shEl?JSON.parse(shEl.textContent||'{}'):{};
+}catch(e){EMBED={};}
 function mergeShared(){
   try{
-    const shEl=document.getElementById('sharedState');
-    const sh=shEl?JSON.parse(shEl.textContent||'{}'):{};
-    if(sh&&sh.v){
+    const sh=EMBED&&EMBED.v===2?EMBED.shared:(EMBED&&EMBED.v?EMBED:null);
+    if(sh){
       if(!state.firstDate&&sh.firstDate){
         state.firstDate=sh.firstDate;state.name1=sh.name1||'';state.name2=sh.name2||'';
       }
       if(sh.days)state.days=Object.assign({},sh.days,state.days);
       if(Array.isArray(sh.entries)){
-        const have=new Set(state.entries.map(e=>e.id));
+        const have=new Set(state.entries.map(e=>e.id).concat(privState.entries.map(e=>e.id)));
         sh.entries.forEach(e=>{if(e&&e.id&&!have.has(e.id))state.entries.push(e);});
       }
       if(Array.isArray(sh.boundaries)){
-        const haveB=new Set(state.boundaries.map(b=>b.id));
+        const haveB=new Set(state.boundaries.map(b=>b.id).concat(privState.boundaries.map(b=>b.id)));
         sh.boundaries.forEach(b=>{if(b&&b.id&&!haveB.has(b.id))state.boundaries.push(b);});
       }
       save();
@@ -1510,22 +1665,54 @@ function restorePage(){
 function showLock(){
   hero.hidden=true;app.hidden=true;topbar.hidden=true;
   $('lockScreen').hidden=false;
+  renderLockWho();
   setTimeout(()=>$('unlockPass').focus(),0);
 }
 
 /* ---------- go ---------- */
 async function boot(){
-  const encRaw=localStorage.getItem(ENC_KEY);
-  if(encRaw){
-    try{cryptoKey=await sessionLoadKey();}catch(e){cryptoKey=null;}
-    if(cryptoKey){
-      try{ state=Object.assign(state,await decState(encRaw)); }
-      catch(e){ cryptoKey=null; try{sessionStorage.removeItem(SESS_KEY);}catch(_){} }
+  // v2 vaults: local meta, refreshed or seeded from the page's embedded record
+  try{
+    const localRaw=localStorage.getItem(ENC2);
+    encMeta=localRaw?JSON.parse(localRaw):null;
+    const es=EMBED&&EMBED.v===2?EMBED.sec:null;
+    if(es){
+      if(!encMeta){
+        encMeta={v:2,iter:es.iter||encIter,salt1:es.salt1,salt2:es.salt2,
+          wrapS1:es.wrapS1,wrapS2:es.wrapS2,wrapP1:es.wrapP1,wrapP2:es.wrapP2,
+          sec_ts:es.sec_ts||0,n1:es.n1||'',n2:es.n2||'',
+          shared:null,priv1:es.priv1||null,priv2:es.priv2||null};
+      }else{
+        if((es.sec_ts||0)>(encMeta.sec_ts||0)){
+          ['iter','salt1','salt2','wrapS1','wrapS2','wrapP1','wrapP2','sec_ts','n1','n2'].forEach(k=>{
+            if(es[k]!==undefined)encMeta[k]=es[k];
+          });
+        }
+        [1,2].forEach(i=>{
+          const a=es['priv'+i],b=encMeta['priv'+i];
+          if(a&&(!b||(a.ts||0)>(b.ts||0)))encMeta['priv'+i]=a;
+        });
+      }
+      localStorage.setItem(ENC2,JSON.stringify(encMeta));
     }
-    if(!cryptoKey){ showLock(); return; }
-  }else{
-    try{const raw=localStorage.getItem(KEY);if(raw)Object.assign(state,JSON.parse(raw));}catch(e){}
+  }catch(e){}
+  if(encMeta){
+    lockMode=2;
+    if(await sess2Load()){
+      try{
+        state=Object.assign(state,encMeta.shared?await decJSON(encMeta.shared,kS):(EMBED&&EMBED.v===2&&EMBED.shared?EMBED.shared:{}));
+        privState=encMeta['priv'+who]?await decJSON(encMeta['priv'+who],kOwn):{entries:[],boundaries:[]};
+      }catch(e){
+        kS=null;kOwn=null;
+        try{sessionStorage.removeItem(SESS2);}catch(_){}
+      }
+    }
+    if(!kS){ showLock(); return; }
+    ensureShape(); mergeShared(); renderAll(); restorePage(); save();
+    return;
   }
+  if(localStorage.getItem(ENC_KEY)){ lockMode=1; showLock(); return; }
+  try{const raw=localStorage.getItem(KEY);if(raw)Object.assign(state,JSON.parse(raw));}catch(e){}
   ensureShape(); mergeShared(); renderAll(); restorePage();
 }
 boot();
