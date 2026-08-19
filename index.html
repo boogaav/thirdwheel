@@ -138,7 +138,9 @@ input,textarea{font:inherit;color:var(--ink)}
 }
 .go:hover{filter:brightness(1.08)}
 .cancel-edit{font-size:14px;color:var(--ink-soft);text-decoration:underline;text-underline-offset:3px;padding:12px 4px}
-.hero .hint{margin-top:14px;font-size:13px;color:var(--ink-faint)}
+.hero .hint{margin-top:14px;font-size:13px;color:var(--ink-faint);max-width:40em}
+.perr{margin:14px 0 0;font-size:14px;font-weight:600;color:var(--accent-ink)}
+.linklike{font-size:inherit;color:var(--ink-soft);text-decoration:underline;text-underline-offset:3px}
 
 /* ---------- layout ---------- */
 .layout{display:grid;grid-template-columns:290px 1fr;gap:48px;padding:44px 0 24px}
@@ -368,6 +370,7 @@ footer button{font-size:13px;color:var(--ink-soft);text-decoration:underline;tex
     </nav>
     <span class="who" id="whoLine"></span>
     <button class="edit" id="editBtn">Edit details</button>
+    <button class="edit" id="lockBtn" style="margin-left:0" hidden>Lock</button>
   </div>
 </header>
 
@@ -388,10 +391,30 @@ footer button{font-size:13px;color:var(--ink-soft);text-decoration:underline;tex
       <label for="name2">Them <span style="text-transform:none;letter-spacing:0">(optional)</span></label>
       <input type="text" id="name2" placeholder="Sam" autocomplete="off" maxlength="20">
     </div>
+    <div class="field names">
+      <label for="passphrase">Passphrase</label>
+      <input type="password" id="passphrase" placeholder="min 6 chars" autocomplete="new-password" maxlength="64">
+    </div>
     <button class="go" id="goBtn">Trace the journey</button>
     <button class="cancel-edit" id="cancelEdit" hidden>Cancel</button>
   </div>
-  <p class="hint">Everything stays in this browser &mdash; nothing is sent anywhere.</p>
+  <p class="perr" id="passErr" hidden></p>
+  <p class="hint">The passphrase locks your diary on this device &mdash; everything is stored encrypted, and there&rsquo;s no recovery if it&rsquo;s forgotten. Nothing is sent anywhere.</p>
+</section>
+
+<section class="hero wrap" id="lockScreen" hidden>
+  <span class="wordmark">Us, So Far</span>
+  <h1 class="display">Welcome back.</h1>
+  <p class="lede">This diary is locked. Enter your couple passphrase to open it.</p>
+  <div class="setup">
+    <div class="field">
+      <label for="unlockPass">Passphrase</label>
+      <input type="password" id="unlockPass" autocomplete="current-password" maxlength="64">
+    </div>
+    <button class="go" id="unlockBtn">Unlock</button>
+  </div>
+  <p class="perr" id="unlockErr" hidden>That passphrase doesn&rsquo;t open this diary.</p>
+  <p class="hint">Forgotten? There&rsquo;s no recovery &mdash; <button class="linklike" id="lockReset">start over</button> erases everything on this device.</p>
 </section>
 
 <main class="wrap" id="app" hidden>
@@ -464,7 +487,7 @@ footer button{font-size:13px;color:var(--ink-soft);text-decoration:underline;tex
 
 <footer>
   <div class="wrap">
-    <p>Your dates, marks and notes live only in this browser&rsquo;s storage.</p>
+    <p>Your dates, marks, notes and diary stay in this browser &mdash; encrypted with your passphrase.</p>
     <button id="resetBtn">Start over</button>
   </div>
 </footer>
@@ -519,11 +542,48 @@ const STAGES = [
 ];
 
 /* ---------- state ---------- */
-const KEY='us-so-far-v1';
+const KEY='us-so-far-v1',ENC_KEY='us-so-far-enc-v1',SESS_KEY='us-so-far-sk';
 let state={firstDate:null,name1:'',name2:'',stageOverride:null,days:{},entries:[]};
-try{ const raw=localStorage.getItem(KEY); if(raw) state=Object.assign(state,JSON.parse(raw)); }catch(e){}
-if(!Array.isArray(state.entries)) state.entries=[];
-function save(){ try{ localStorage.setItem(KEY,JSON.stringify(state)); }catch(e){} }
+let cryptoKey=null,encSalt=null,encIter=310000;
+function ensureShape(){ if(!Array.isArray(state.entries))state.entries=[]; if(!state.days)state.days={}; }
+function save(){
+  try{
+    if(cryptoKey) encSave();
+    else localStorage.setItem(KEY,JSON.stringify(state));
+  }catch(e){}
+}
+let encBusy=false,encAgain=false;
+async function encSave(){
+  if(encBusy){encAgain=true;return;}
+  encBusy=true;
+  try{
+    const iv=crypto.getRandomValues(new Uint8Array(12));
+    const ct=await crypto.subtle.encrypt({name:'AES-GCM',iv:iv},cryptoKey,new TextEncoder().encode(JSON.stringify(state)));
+    localStorage.setItem(ENC_KEY,JSON.stringify({v:1,iter:encIter,salt:b64(encSalt),iv:b64(iv),ct:b64(new Uint8Array(ct))}));
+    localStorage.removeItem(KEY);
+  }catch(e){}
+  encBusy=false;
+  if(encAgain){encAgain=false;encSave();}
+}
+function b64(u){let s='';u.forEach(c=>s+=String.fromCharCode(c));return btoa(s);}
+function unb64(s){const bin=atob(s);const u=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i);return u;}
+async function deriveKey(pass,salt,iter){
+  const km=await crypto.subtle.importKey('raw',new TextEncoder().encode(pass),'PBKDF2',false,['deriveKey']);
+  return crypto.subtle.deriveKey({name:'PBKDF2',salt:salt,iterations:iter,hash:'SHA-256'},km,{name:'AES-GCM',length:256},true,['encrypt','decrypt']);
+}
+async function sessionSaveKey(){
+  try{const raw=await crypto.subtle.exportKey('raw',cryptoKey);sessionStorage.setItem(SESS_KEY,b64(new Uint8Array(raw)));}catch(e){}
+}
+async function sessionLoadKey(){
+  const s=sessionStorage.getItem(SESS_KEY);if(!s)return null;
+  return crypto.subtle.importKey('raw',unb64(s),{name:'AES-GCM'},true,['encrypt','decrypt']);
+}
+async function decState(metaRaw){
+  const m=JSON.parse(metaRaw);
+  const pt=await crypto.subtle.decrypt({name:'AES-GCM',iv:unb64(m.iv)},cryptoKey,unb64(m.ct));
+  encSalt=unb64(m.salt);encIter=m.iter||encIter;
+  return JSON.parse(new TextDecoder().decode(pt));
+}
 
 /* ---------- date helpers (noon-anchored to dodge DST) ---------- */
 function parseD(s){ const [y,m,d]=s.split('-').map(Number); return new Date(y,m-1,d,12); }
@@ -549,15 +609,67 @@ const hero=$('hero'), app=$('app'), topbar=$('topbar');
 
 /* ---------- setup / hero ---------- */
 $('firstDate').max=fmtKey(today());
-$('goBtn').addEventListener('click',()=>{
+function passErr(msg){ const el=$('passErr'); el.textContent=msg; el.hidden=!msg; }
+$('goBtn').addEventListener('click',async()=>{
+  passErr('');
   const v=$('firstDate').value;
   if(!v){ $('firstDate').focus(); return; }
   if(parseD(v)>today()){ alert('Your first date needs to be in the past — this maps the road already travelled.'); return; }
+  const pv=$('passphrase').value;
+  if(!cryptoKey){
+    if(pv.length<6){ passErr('Set a passphrase of at least 6 characters — it locks the diary.'); $('passphrase').focus(); return; }
+  }else if(pv&&pv.length<6){ passErr('A new passphrase needs at least 6 characters (or leave it empty to keep the current one).'); return; }
+  if(pv.length>=6){
+    encSalt=crypto.getRandomValues(new Uint8Array(16));
+    try{ cryptoKey=await deriveKey(pv,encSalt,encIter); await sessionSaveKey(); }
+    catch(e){ passErr('Encryption isn’t available in this browser.'); cryptoKey=null; }
+  }
+  $('passphrase').value='';
   state.firstDate=v;
   state.name1=$('name1').value.trim();
   state.name2=$('name2').value.trim();
   save(); renderAll();
   publishShared();
+});
+async function tryUnlock(){
+  const el=$('unlockErr'); el.hidden=true;
+  const pv=$('unlockPass').value;
+  if(!pv) return;
+  const encRaw=localStorage.getItem(ENC_KEY);
+  if(!encRaw) return;
+  try{
+    const m=JSON.parse(encRaw);
+    cryptoKey=await deriveKey(pv,unb64(m.salt),m.iter||encIter);
+    state=Object.assign(state,await decState(encRaw));
+    ensureShape();
+    await sessionSaveKey();
+    $('unlockPass').value='';
+    $('lockScreen').hidden=true;
+    mergeShared(); renderAll(); restorePage();
+  }catch(e){
+    cryptoKey=null;
+    el.hidden=false;
+    $('unlockPass').select();
+  }
+}
+$('unlockBtn').addEventListener('click',tryUnlock);
+$('unlockPass').addEventListener('keydown',e=>{ if(e.key==='Enter')tryUnlock(); });
+$('lockBtn').addEventListener('click',()=>{
+  try{sessionStorage.removeItem(SESS_KEY);}catch(e){}
+  location.reload();
+});
+function wipeAll(){
+  try{
+    localStorage.removeItem(KEY);localStorage.removeItem(ENC_KEY);
+    sessionStorage.removeItem(SESS_KEY);sessionStorage.removeItem('us-so-far-page');
+  }catch(e){}
+  cryptoKey=null;encSalt=null;
+  state={firstDate:null,name1:'',name2:'',stageOverride:null,days:{},entries:[]};
+}
+$('lockReset').addEventListener('click',()=>{
+  if(confirm('Erase the first date and every mark, note and entry from this browser?')){
+    wipeAll(); location.reload();
+  }
 });
 $('editBtn').addEventListener('click',()=>{
   $('firstDate').value=state.firstDate; $('name1').value=state.name1; $('name2').value=state.name2;
@@ -567,9 +679,8 @@ $('editBtn').addEventListener('click',()=>{
 });
 $('cancelEdit').addEventListener('click',()=>{ renderAll(); });
 $('resetBtn').addEventListener('click',()=>{
-  if(confirm('Erase the first date and every mark and note from this browser?')){
-    localStorage.removeItem(KEY);
-    state={firstDate:null,name1:'',name2:'',stageOverride:null,days:{}};
+  if(confirm('Erase the first date and every mark, note and entry from this browser?')){
+    wipeAll();
     $('firstDate').value='';$('name1').value='';$('name2').value='';
     renderAll(); window.scrollTo({top:0});
   }
@@ -579,7 +690,9 @@ $('resetBtn').addEventListener('click',()=>{
 function renderAll(){
   const has=!!state.firstDate;
   hero.hidden=has; app.hidden=!has; topbar.hidden=!has;
+  $('lockScreen').hidden=true;
   $('cancelEdit').hidden=true;
+  $('lockBtn').hidden=!cryptoKey;
   if(!has) return;
   renderTopbar(); renderRoute(); renderStage(); renderStats(); renderOrganism(); renderCalendars(); renderDiary();
 }
@@ -1135,7 +1248,7 @@ function pageSource(){
     const c=root.querySelector('#'+id);if(c){c.removeAttribute('width');c.removeAttribute('height');c.removeAttribute('style');}
   });
   const hero=root.querySelector('#hero');if(hero)hero.removeAttribute('hidden');
-  ['app','topbar','cancelEdit','pop','pageDiary'].forEach(id=>{
+  ['app','topbar','cancelEdit','pop','pageDiary','lockScreen','passErr','unlockErr','lockBtn'].forEach(id=>{
     const el=root.querySelector('#'+id);if(el)el.setAttribute('hidden','');
   });
   const pj=root.querySelector('#pageJourney');if(pj)pj.removeAttribute('hidden');
@@ -1178,26 +1291,49 @@ async function publishShared(){
 })();
 
 /* ---------- adopt the page's shared record ---------- */
-try{
-  const shEl=document.getElementById('sharedState');
-  const sh=shEl?JSON.parse(shEl.textContent||'{}'):{};
-  if(sh&&sh.v){
-    if(!state.firstDate&&sh.firstDate){
-      state.firstDate=sh.firstDate;state.name1=sh.name1||'';state.name2=sh.name2||'';
+function mergeShared(){
+  try{
+    const shEl=document.getElementById('sharedState');
+    const sh=shEl?JSON.parse(shEl.textContent||'{}'):{};
+    if(sh&&sh.v){
+      if(!state.firstDate&&sh.firstDate){
+        state.firstDate=sh.firstDate;state.name1=sh.name1||'';state.name2=sh.name2||'';
+      }
+      if(sh.days)state.days=Object.assign({},sh.days,state.days);
+      if(Array.isArray(sh.entries)){
+        const have=new Set(state.entries.map(e=>e.id));
+        sh.entries.forEach(e=>{if(e&&e.id&&!have.has(e.id))state.entries.push(e);});
+      }
+      save();
     }
-    if(sh.days)state.days=Object.assign({},sh.days,state.days);
-    if(Array.isArray(sh.entries)){
-      const have=new Set(state.entries.map(e=>e.id));
-      sh.entries.forEach(e=>{if(e&&e.id&&!have.has(e.id))state.entries.push(e);});
-    }
-    save();
-  }
-}catch(e){}
+  }catch(e){}
+}
+function restorePage(){
+  try{
+    const p=sessionStorage.getItem('us-so-far-page');
+    if(p){sessionStorage.removeItem('us-so-far-page');if(p==='diary'&&state.firstDate)switchPage('diary');}
+  }catch(e){}
+}
+function showLock(){
+  hero.hidden=true;app.hidden=true;topbar.hidden=true;
+  $('lockScreen').hidden=false;
+  setTimeout(()=>$('unlockPass').focus(),0);
+}
 
 /* ---------- go ---------- */
-renderAll();
-try{
-  const p=sessionStorage.getItem('us-so-far-page');
-  if(p){sessionStorage.removeItem('us-so-far-page');if(p==='diary'&&state.firstDate)switchPage('diary');}
-}catch(e){}
+async function boot(){
+  const encRaw=localStorage.getItem(ENC_KEY);
+  if(encRaw){
+    try{cryptoKey=await sessionLoadKey();}catch(e){cryptoKey=null;}
+    if(cryptoKey){
+      try{ state=Object.assign(state,await decState(encRaw)); }
+      catch(e){ cryptoKey=null; try{sessionStorage.removeItem(SESS_KEY);}catch(_){} }
+    }
+    if(!cryptoKey){ showLock(); return; }
+  }else{
+    try{const raw=localStorage.getItem(KEY);if(raw)Object.assign(state,JSON.parse(raw));}catch(e){}
+  }
+  ensureShape(); mergeShared(); renderAll(); restorePage();
+}
+boot();
 </script>
